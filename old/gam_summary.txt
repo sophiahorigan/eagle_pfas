@@ -1,0 +1,31 @@
+
+Family: gaussian 
+Link function: identity 
+
+Formula:
+log_igy ~ s(log_TOTAL_PFAS) + sex + year
+
+Parametric coefficients:
+             Estimate Std. Error
+(Intercept) 399.56143   34.02981
+sexF         -0.25961    0.14065
+sexM         -0.20830    0.14013
+year         -0.19757    0.01681
+            t value Pr(>|t|)    
+(Intercept)  11.742   <2e-16 ***
+sexF         -1.846   0.0677 .  
+sexM         -1.486   0.1401    
+year        -11.751   <2e-16 ***
+---
+Signif. codes:  
+  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’
+  0.05 ‘.’ 0.1 ‘ ’ 1
+
+Approximate significance of smooth terms:
+                  edf Ref.df
+s(log_TOTAL_PFAS)   1      1
+                      F p-value
+s(log_TOTAL_PFAS) 2.078   0.152
+
+R-sq.(adj) =   0.56   Deviance explained = 57.6%
+-REML = -51.177  Scale est. = 0.01901   n = 111
