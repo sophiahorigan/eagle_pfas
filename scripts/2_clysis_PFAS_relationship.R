@@ -157,6 +157,29 @@ run_shape_models <- function(response_var, response_label) {
     )
     
     # ---- Store results ----
+    
+    # ---- Determine Direction ----
+    y_min_pred <- predict(best_model,
+                          newdata = data.frame(
+                            x = min(df$x),
+                            log_x = log(min(df$x) + 1e-6),
+                            x2 = min(df$x)^2,
+                            x_adj = min(df$x) + 1e-6
+                          ))
+    
+    y_max_pred <- predict(best_model,
+                          newdata = data.frame(
+                            x = max(df$x),
+                            log_x = log(max(df$x) + 1e-6),
+                            x2 = max(df$x)^2,
+                            x_adj = max(df$x) + 1e-6
+                          ))
+    
+    delta_y <- as.numeric(y_max_pred - y_min_pred)
+    slope_global <- delta_y / (max(df$x) - min(df$x))
+    
+    direction <- ifelse(delta_y > 0, "Increasing",
+                        ifelse(delta_y < 0, "Decreasing", "Flat"))
     results_list[[paste(pfas_var, response_label, sep = "_")]] <-
       data.frame(
         PFAS = pfas_var,
@@ -166,7 +189,10 @@ run_shape_models <- function(response_var, response_label) {
         R2 = r2,
         Adj_R2 = adj_r2,
         P_value = p_value,
-        N = nrow(df)
+        N = nrow(df),
+        Slope_Global = slope_global,
+        Delta_Y = delta_y,
+        Direction = direction
       )
   }
   
