@@ -7,6 +7,10 @@ library(tidyr)
 # ========= SETTINGS =========
 out_dir <- "./output/2_clysis_pfas_relationship"
 if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE)
+raw_plot_dir <- file.path(out_dir, "raw")
+log_plot_dir <- file.path(out_dir, "log")
+if (!dir.exists(raw_plot_dir)) dir.create(raw_plot_dir, recursive = TRUE)
+if (!dir.exists(log_plot_dir)) dir.create(log_plot_dir, recursive = TRUE)
 
 # ========= LOAD DATA =========
 data <- read.csv("./input/2023_2024_2025_AllData.csv", stringsAsFactors = FALSE)
@@ -56,6 +60,7 @@ pfas_vars <- unique(c(pfas_present, sum_cols))
 run_shape_models <- function(response_var, response_label) {
   
   results_list <- list()
+  plot_list <- list()
   
   for (pfas_var in pfas_vars) {
     
@@ -135,29 +140,6 @@ run_shape_models <- function(response_var, response_label) {
     
     pred_df$fit <- predict(best_model, newdata = pred_df)
     
-    # ---- Plot ----
-    p <- ggplot(df, aes(x = x, y = y)) +
-      geom_point(alpha = 0.6) +
-      geom_line(data = pred_df,
-                aes(x = x, y = fit),
-                color = "blue",
-                linewidth = 1) +
-      labs(title = paste("Best Fit:", best_model_name, "-", pfas_var),
-           subtitle = paste(response_label,
-                            "| p =", signif(p_value, 3)),
-           x = pfas_var,
-           y = response_label) +
-      theme_minimal()
-    
-    ggsave(
-      filename = paste0(out_dir, "/",
-                        pfas_var, "_", response_label, "_shape.jpeg"),
-      plot = p,
-      width = 7, height = 5, dpi = 300
-    )
-    
-    # ---- Store results ----
-    
     # ---- Determine Direction ----
     y_min_pred <- predict(best_model,
                           newdata = data.frame(
@@ -180,7 +162,10 @@ run_shape_models <- function(response_var, response_label) {
     
     direction <- ifelse(delta_y > 0, "Increasing",
                         ifelse(delta_y < 0, "Decreasing", "Flat"))
-    results_list[[paste(pfas_var, response_label, sep = "_")]] <-
+    
+    row_key <- paste(pfas_var, response_label, sep = "_")
+    
+    results_list[[row_key]] <-
       data.frame(
         PFAS = pfas_var,
         Response = response_label,
@@ -194,19 +179,62 @@ run_shape_models <- function(response_var, response_label) {
         Delta_Y = delta_y,
         Direction = direction
       )
+    
+    plot_list[[row_key]] <- list(
+      df = df,
+      pred_df = pred_df,
+      best_model_name = best_model_name,
+      pfas_var = pfas_var,
+      response_label = response_label,
+      file_path = file.path(
+        ifelse(grepl("^log_", response_label), log_plot_dir, raw_plot_dir),
+        paste0(pfas_var, "_", response_label, "_shape.jpeg")
+      )
+    )
   }
   
-  return(results_list)
+  return(list(results = results_list, plots = plot_list))
 }
 
 # ========= RUN =========
 results_raw <- run_shape_models("clysis", "clysis_raw")
 results_log <- run_shape_models("clysis", "log_clysis")
 
-all_results <- do.call(rbind, c(results_raw, results_log))
+all_results <- do.call(rbind, c(results_raw$results, results_log$results))
 
 # ========= MULTIPLE TEST CORRECTION =========
 all_results$FDR_P <- p.adjust(all_results$P_value, method = "BH")
+
+# ========= PLOT WITH SIGNIFICANCE COLORS =========
+all_plots <- c(results_raw$plots, results_log$plots)
+
+for (row_key in names(all_plots)) {
+  plot_info <- all_plots[[row_key]]
+  result_row <- all_results[row_key, , drop = FALSE]
+  
+  is_significant <- isTRUE(result_row$P_value < 0.05) || isTRUE(result_row$FDR_P < 0.05)
+  line_color <- ifelse(is_significant, "blue", "gray80")
+  
+  p <- ggplot(plot_info$df, aes(x = x, y = y)) +
+    geom_point(alpha = 0.6) +
+    geom_line(data = plot_info$pred_df,
+              aes(x = x, y = fit),
+              color = line_color,
+              linewidth = 1) +
+    labs(title = paste("Best Fit:", plot_info$best_model_name, "-", plot_info$pfas_var),
+         subtitle = paste(plot_info$response_label,
+                          "| p =", signif(result_row$P_value, 3),
+                          "| FDR =", signif(result_row$FDR_P, 3)),
+         x = plot_info$pfas_var,
+         y = plot_info$response_label) +
+    theme_minimal()
+  
+  ggsave(
+    filename = plot_info$file_path,
+    plot = p,
+    width = 7, height = 5, dpi = 300
+  )
+}
 
 # ========= SAVE =========
 write.csv(all_results,
