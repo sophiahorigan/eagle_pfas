@@ -5,9 +5,8 @@ library(dplyr)
 library(tidyr)
 
 # ========= SETTINGS =========
-
-if (!dir.exists("./output/2_clysis_pfas_relationship"))
-  dir.create("./output/2_clysis_pfas_relationship")
+out_dir <- "./output/2_clysis_pfas_relationship"
+if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE)
 
 # ========= LOAD DATA =========
 data <- read.csv("./input/2023_2024_2025_AllData.csv", stringsAsFactors = FALSE)
@@ -27,39 +26,26 @@ long_pf <- data_clean %>%
   filter(!is.na(conc)) %>%
   left_join(key, by = "pfas_analyte")
 
-chain_sums <- long_pf %>%
-  filter(!is.na(chain_cat)) %>%
-  group_by(bird_id, chain_cat) %>%
-  summarize(sum_val = sum(conc), .groups = "drop") %>%
-  pivot_wider(names_from = chain_cat,
-              values_from = sum_val,
-              values_fill = 0,
-              names_prefix = "chain_")
+make_sum_table <- function(df, group_var, prefix) {
+  df %>%
+    filter(!is.na(.data[[group_var]])) %>%
+    group_by(bird_id, .data[[group_var]]) %>%
+    summarize(sum_val = sum(conc), .groups = "drop") %>%
+    pivot_wider(names_from = all_of(group_var),
+                values_from = sum_val,
+                values_fill = 0,
+                names_prefix = prefix)
+}
 
-func_sums <- long_pf %>%
-  filter(!is.na(func_cat)) %>%
-  group_by(bird_id, func_cat) %>%
-  summarize(sum_val = sum(conc), .groups = "drop") %>%
-  pivot_wider(names_from = func_cat,
-              values_from = sum_val,
-              values_fill = 0,
-              names_prefix = "func_")
-
-age_sums <- long_pf %>%
-  filter(!is.na(pfas_age)) %>%
-  group_by(bird_id, pfas_age) %>%
-  summarize(sum_val = sum(conc), .groups = "drop") %>%
-  pivot_wider(names_from = pfas_age,
-              values_from = sum_val,
-              values_fill = 0,
-              names_prefix = "age_")
+chain_sums <- make_sum_table(long_pf, "chain_cat", "chain_")
+func_sums  <- make_sum_table(long_pf, "func_cat",  "func_")
+age_sums   <- make_sum_table(long_pf, "pfas_age",  "age_")
 
 data_model <- data_clean %>%
   left_join(chain_sums, by = "bird_id") %>%
   left_join(func_sums,  by = "bird_id") %>%
   left_join(age_sums,   by = "bird_id")
 
-# Replace NA sums with 0
 sum_cols <- grep("^(chain_|func_|age_)", colnames(data_model), value = TRUE)
 data_model[sum_cols][is.na(data_model[sum_cols])] <- 0
 
@@ -86,7 +72,7 @@ run_shape_models <- function(response_var, response_label) {
       df$y <- log(df$y)
     }
     
-    if (nrow(df) < 6) next
+    if (nrow(df) < 8) next
     
     df <- df %>%
       mutate(
@@ -96,8 +82,7 @@ run_shape_models <- function(response_var, response_label) {
         x_adj = x + 1e-6
       )
     
-    # ---- Fit models ----
-    
+    # ---- Fit candidate models ----
     models <- list(
       linear = try(lm(y ~ x, data = df), silent = TRUE),
       log = try(lm(y ~ log_x, data = df), silent = TRUE),
@@ -117,9 +102,30 @@ run_shape_models <- function(response_var, response_label) {
     best_model_name <- names(which.min(model_aics))
     best_model <- valid_models[[best_model_name]]
     
-    # ---- Prediction grid ----
+    # ---- Null model comparison ----
+    null_model <- lm(y ~ 1, data = df)
     
+    if (inherits(best_model, "lm")) {
+      
+      model_test <- anova(null_model, best_model)
+      p_value <- model_test$`Pr(>F)`[2]
+      r2 <- summary(best_model)$r.squared
+      adj_r2 <- summary(best_model)$adj.r.squared
+      
+    } else if (inherits(best_model, "nls")) {
+      
+      delta_aic <- AIC(null_model) - AIC(best_model)
+      lr_stat <- 2 * delta_aic
+      df_diff <- length(coef(best_model))
+      p_value <- pchisq(lr_stat, df = df_diff, lower.tail = FALSE)
+      
+      r2 <- NA
+      adj_r2 <- NA
+    }
+    
+    # ---- Prediction grid ----
     new_x <- seq(min(df$x), max(df$x), length.out = 200)
+    
     pred_df <- data.frame(
       x = new_x,
       log_x = log(new_x + 1e-6),
@@ -130,7 +136,6 @@ run_shape_models <- function(response_var, response_label) {
     pred_df$fit <- predict(best_model, newdata = pred_df)
     
     # ---- Plot ----
-    
     p <- ggplot(df, aes(x = x, y = y)) +
       geom_point(alpha = 0.6) +
       geom_line(data = pred_df,
@@ -138,39 +143,48 @@ run_shape_models <- function(response_var, response_label) {
                 color = "blue",
                 linewidth = 1) +
       labs(title = paste("Best Fit:", best_model_name, "-", pfas_var),
-           subtitle = response_label,
+           subtitle = paste(response_label,
+                            "| p =", signif(p_value, 3)),
            x = pfas_var,
            y = response_label) +
       theme_minimal()
     
     ggsave(
-      filename = paste0("./output/2_clysis_pfas_relationship/",
+      filename = paste0(out_dir, "/",
                         pfas_var, "_", response_label, "_shape.jpeg"),
       plot = p,
       width = 7, height = 5, dpi = 300
     )
     
+    # ---- Store results ----
     results_list[[paste(pfas_var, response_label, sep = "_")]] <-
       data.frame(
         PFAS = pfas_var,
         Response = response_label,
         Best_Model = best_model_name,
-        AIC = min(model_aics)
+        AIC = min(model_aics),
+        R2 = r2,
+        Adj_R2 = adj_r2,
+        P_value = p_value,
+        N = nrow(df)
       )
   }
   
   return(results_list)
 }
 
-# ========= RUN BOTH RESPONSE TYPES =========
-
-results_raw  <- run_shape_models("clysis", "clysis_raw")
-results_log  <- run_shape_models("clysis", "log_clysis")
-
-# ========= SAVE SUMMARY =========
+# ========= RUN =========
+results_raw <- run_shape_models("clysis", "clysis_raw")
+results_log <- run_shape_models("clysis", "log_clysis")
 
 all_results <- do.call(rbind, c(results_raw, results_log))
 
+# ========= MULTIPLE TEST CORRECTION =========
+all_results$FDR_P <- p.adjust(all_results$P_value, method = "BH")
+
+# ========= SAVE =========
 write.csv(all_results,
-          "./output/2_clysis_pfas_relationship/clysis_best_shape_summary.csv",
+          file.path(out_dir, "clysis_best_shape_summary.csv"),
           row.names = FALSE)
+
+print("Clysis modeling complete.")
