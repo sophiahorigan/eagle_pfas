@@ -53,7 +53,11 @@ data_model <- data_clean %>%
 sum_cols <- grep("^(chain_|func_|age_)", colnames(data_model), value = TRUE)
 data_model[sum_cols][is.na(data_model[sum_cols])] <- 0
 
-pfas_vars <- unique(c(pfas_present, sum_cols))
+pfas_matrix <- data_model[, pfas_present, drop = FALSE]
+data_model$TOTAL_PFAS <- rowSums(pfas_matrix, na.rm = TRUE)
+data_model$TOTAL_PFAS[rowSums(!is.na(pfas_matrix)) == 0] <- NA_real_
+
+pfas_vars <- unique(c(pfas_present, "TOTAL_PFAS", sum_cols))
 
 # ========= MODELING FUNCTION =========
 
